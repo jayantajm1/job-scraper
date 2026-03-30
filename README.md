@@ -22,7 +22,31 @@ You'll get a prompt to choose mode:
 - **auto** - Auto-apply to all jobs without review
 - **skip** - Just scrape, don't apply
 
-### 3. Apply to Existing Jobs (Standalone)
+### 3. Run Web API + React Frontend (NEW)
+
+Backend API (Flask):
+```bash
+pip install -r requirements.txt
+python api_server.py
+```
+
+Frontend (React + Vite):
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the UI:
+- `http://localhost:5173`
+
+The frontend supports:
+- Start scraping with one click
+- Run auto-apply or interactive apply tasks
+- View recent task logs/status
+- Preview rows from generated Excel job files
+
+### 4. Apply to Existing Jobs (Standalone)
 
 **Interactive Mode:**
 ```bash
@@ -46,6 +70,7 @@ python auto_apply.py dotnet_jobs_20260327_084640.xlsx 30
 ```
 .
 ├── dotnet_job_scraper.py       # Main scraper + application coordinator
+├── api_server.py                # Flask API wrapper for web frontend
 ├── apply_jobs.py                # Apply with choice of interactive/auto mode
 ├── auto_apply.py                # Quick auto-apply without options
 ├── profile.py                   # Load candidate details from mydetail.md
@@ -55,6 +80,8 @@ python auto_apply.py dotnet_jobs_20260327_084640.xlsx 30
 ├── test_system.py               # Validate all modules
 ├── mydetail.md                  # Your profile, Q&A, links (EDIT THIS)
 ├── Jayanta_Mardi_December_2025.pdf  # Your resume
+├── requirements.txt             # Python dependencies (CLI + API)
+├── frontend/                    # React web dashboard
 └── dotnet_jobs_*.xlsx           # Generated job listings
 ```
 
