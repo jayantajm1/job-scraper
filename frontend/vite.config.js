@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Project Pages site is served from /<repo-name>/.
+  base: '/job-scraper/',
   plugins: [react()],
   server: {
     port: 5173,
