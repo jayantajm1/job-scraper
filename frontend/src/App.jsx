@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -42,7 +42,7 @@ function App() {
 
   const latestTask = useMemo(() => tasks[0], [tasks])
 
-  async function loadFiles() {
+  const loadFiles = useCallback(async () => {
     const response = await fetch(api('/api/files'))
     const payload = await response.json()
     const incoming = payload.files || []
@@ -51,15 +51,15 @@ function App() {
     if (!selectedFile && incoming.length > 0) {
       setSelectedFile(incoming[0].name)
     }
-  }
+  }, [selectedFile])
 
-  async function loadTasks() {
+  const loadTasks = useCallback(async () => {
     const response = await fetch(api('/api/tasks'))
     const payload = await response.json()
     setTasks(payload.tasks || [])
-  }
+  }, [])
 
-  async function loadJobs(fileName) {
+  const loadJobs = useCallback(async (fileName) => {
     if (!fileName) {
       setJobs([])
       return
@@ -83,7 +83,7 @@ function App() {
     } finally {
       setIsLoadingJobs(false)
     }
-  }
+  }, [])
 
   async function startScrape() {
     setMessage('Starting scraper task...')
@@ -161,71 +161,14 @@ function App() {
     }
   }
 
-  async function markJobApplied(jobNo) {
-    if (!selectedFile) {
-      setMessage('Select an Excel file first.')
-      return
-    }
-
-    try {
-      const response = await fetch(api('/api/mark-applied'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file: selectedFile,
-          jobNo,
-        }),
-      })
-      const payload = await response.json()
-
-      if (!response.ok) {
-        setMessage(payload.error || 'Failed to mark job as applied')
-        return
-      }
-
-      setMessage(`Job #${jobNo} marked as applied at ${new Date(payload.appliedAt).toLocaleTimeString()}`)
-
-      // Refresh jobs to show updated status
-      await loadJobs(selectedFile)
-    } catch (error) {
-      setMessage(`Error marking job as applied: ${error.message}`)
-    }
-  }
-
-  async function initTracking() {
-    if (!selectedFile) {
-      setMessage('Select an Excel file first.')
-      return
-    }
-
-    try {
-      const response = await fetch(api('/api/init-tracking'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file: selectedFile }),
-      })
-      const payload = await response.json()
-
-      if (!response.ok) {
-        setMessage(payload.error || 'Failed to initialize tracking')
-        return
-      }
-
-      setMessage('Tracking columns initialized successfully')
-      await loadJobs(selectedFile)
-    } catch (error) {
-      setMessage(`Error initializing tracking: ${error.message}`)
-    }
-  }
-
   useEffect(() => {
     loadFiles().catch((error) => setMessage(error.message))
     loadTasks().catch((error) => setMessage(error.message))
-  }, [])
+  }, [loadFiles, loadTasks])
 
   useEffect(() => {
     loadJobs(selectedFile).catch((error) => setMessage(error.message))
-  }, [selectedFile])
+  }, [selectedFile, loadJobs])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -234,7 +177,7 @@ function App() {
     }, 3000)
 
     return () => clearInterval(timer)
-  }, [selectedFile])
+  }, [loadFiles, loadTasks])
 
   return (
     <div className="app-container">
