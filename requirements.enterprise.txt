@@ -1,4 +1,0 @@
--r requirements.txt
-celery
-redis
-psycopg2-binary
