@@ -25,6 +25,13 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 
+# Prevent accidental static-site publish commits at repo root.
+/assets/
+/index.html
+/favicon.svg
+/icons.svg
+/.nojekyll
+
 # OS
 .DS_Store
 Thumbs.db

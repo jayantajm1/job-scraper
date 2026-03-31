@@ -4,10 +4,11 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "production"]
 
 jobs:
   test-and-build:
+    if: github.event_name != 'pull_request' || github.base_ref != 'production' || github.head_ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -2,13 +2,21 @@ version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: "weekly"
   - package-ecosystem: "npm"
     directory: "/frontend"
+    target-branch: "main"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "main"
     schedule:
       interval: "weekly"
