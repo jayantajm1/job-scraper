@@ -24,6 +24,16 @@ You'll get a prompt to choose mode:
 
 ### 3. Run Web API + React Frontend (NEW)
 
+One command (Windows):
+```powershell
+.\start-dev.cmd
+```
+
+Or PowerShell directly:
+```powershell
+.\start-dev.ps1
+```
+
 Backend API (Flask):
 ```bash
 pip install -r requirements.txt

@@ -379,7 +379,7 @@ def health_check():
     )
 
 
-@app.options("/api/<path:subpath>")
+@app.route("/api/<path:subpath>", methods=["OPTIONS"])
 def preflight_options(subpath: str):
     return ("", 204)
 
