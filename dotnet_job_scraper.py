@@ -20,7 +20,9 @@ import sys
 import csv
 import json
 import os
+import urllib.parse
 from datetime import datetime
+from requests.exceptions import ProxyError, RequestException
 
 OPENPYXL_AVAILABLE = True
 try:
@@ -50,6 +52,13 @@ from dotenv import load_dotenv
 # Load environment variables from .env file if it exists
 load_dotenv()
 
+# Default to bypassing system proxy because many Windows proxy setups
+# break outbound HTTPS calls to Apify (ConnectionResetError 10054).
+DISABLE_SYSTEM_PROXY = os.getenv("DISABLE_SYSTEM_PROXY", "1").strip().lower() in {"1", "true", "yes", "on"}
+HTTP = requests.Session()
+if DISABLE_SYSTEM_PROXY:
+    HTTP.trust_env = False
+
 APIFY_API_TOKEN  = os.getenv('APIFY_API_TOKEN')  # Set in .env or export APIFY_API_TOKEN=your_token
 if not APIFY_API_TOKEN:
     print("[ERROR] APIFY_API_TOKEN not found. Set it in .env file or environment variable.")
@@ -73,8 +82,9 @@ SOURCES = [
         "actor_id": "curious_coder/linkedin-jobs-scraper",
         "count":    40,
         "payload":  lambda kw, loc, n: {
-            "title":    kw,
-            "location": loc,
+            "urls": [
+                f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote_plus(kw)}&location={urllib.parse.quote_plus(loc)}"
+            ],
             "rows":     n,
         },
     },
@@ -91,7 +101,7 @@ SOURCES = [
     },
     {
         "name":     "Glassdoor",
-        "actor_id": "misceres/glassdoor-scraper",
+        "actor_id": "orgupdate/glassdoor-jobs-scraper",
         "count":    20,
         "payload":  lambda kw, loc, n: {
             "keyword":  kw,
@@ -113,46 +123,90 @@ if not OPENPYXL_AVAILABLE:
 
 def run_actor(actor_id: str, payload: dict, max_items: int) -> list[dict]:
     """Start an Apify actor run, wait for completion, and return dataset items."""
-    params  = {"token": APIFY_API_TOKEN}
-    headers = {"Content-Type": "application/json"}
+    def _raise_api_error(resp: requests.Response) -> None:
+        if resp.ok:
+            return
+
+        message = ""
+        try:
+            message = resp.json().get("error", {}).get("message", "")
+        except Exception:
+            message = ""
+
+        if resp.status_code == 401:
+            print("  ❌ Invalid Apify API token. Check your APIFY_API_TOKEN.")
+            sys.exit(1)
+
+        if resp.status_code == 403 and "Monthly usage hard limit exceeded" in message:
+            raise RuntimeError(
+                "Apify monthly usage hard limit exceeded. "
+                "Increase your Apify spending limit or wait for the next billing cycle."
+            )
+
+        if resp.status_code == 403 and "rent a paid Actor" in message:
+            raise RuntimeError("This Apify actor requires rental/payment before it can run.")
+
+        if message:
+            raise RuntimeError(f"Apify API error ({resp.status_code}): {message}")
+
+        resp.raise_for_status()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {APIFY_API_TOKEN}",
+    }
     actor_api_id = actor_id.replace("/", "~")
 
-    # Start run
-    resp = requests.post(
-        f"{APIFY_BASE}/acts/{actor_api_id}/runs",
-        json=payload, headers=headers, params=params, timeout=30
-    )
-    if resp.status_code == 401:
-        print("  ❌ Invalid Apify API token. Check your APIFY_API_TOKEN.")
-        sys.exit(1)
-    resp.raise_for_status()
+    try:
+        # Start run
+        resp = HTTP.post(
+            f"{APIFY_BASE}/acts/{actor_api_id}/runs",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+        _raise_api_error(resp)
 
-    run_id = resp.json()["data"]["id"]
-    print(f"     Run ID: {run_id} — waiting for results...")
+        run_id = resp.json()["data"]["id"]
+        print(f"     Run ID: {run_id} — waiting for results...")
 
-    # Poll until done (max 6 minutes)
-    status_url = f"{APIFY_BASE}/actor-runs/{run_id}"
-    for i in range(72):
-        time.sleep(5)
-        s = requests.get(status_url, params=params, timeout=15).json()["data"]["status"]
-        print(f"     [{i*5}s] Status: {s}", end="\r")
-        if s == "SUCCEEDED":
-            print()
-            break
-        if s in ("FAILED", "ABORTED", "TIMED-OUT"):
-            print(f"\n  ⚠️  Actor ended with status: {s}. Skipping this source.")
+        # Poll until done (max 6 minutes)
+        status_url = f"{APIFY_BASE}/actor-runs/{run_id}"
+        for i in range(72):
+            time.sleep(5)
+            status_resp = HTTP.get(status_url, headers=headers, timeout=15)
+            _raise_api_error(status_resp)
+            s = status_resp.json()["data"]["status"]
+            print(f"     [{i*5}s] Status: {s}", end="\r")
+            if s == "SUCCEEDED":
+                print()
+                break
+            if s in ("FAILED", "ABORTED", "TIMED-OUT"):
+                print(f"\n  ⚠️  Actor ended with status: {s}. Skipping this source.")
+                return []
+        else:
+            print(f"\n  ⚠️  Timeout waiting for actor {actor_id}. Skipping.")
             return []
-    else:
-        print(f"\n  ⚠️  Timeout waiting for actor {actor_id}. Skipping.")
-        return []
 
-    # Fetch items
-    dataset_id = requests.get(status_url, params=params, timeout=15).json()["data"]["defaultDatasetId"]
-    items = requests.get(
-        f"{APIFY_BASE}/datasets/{dataset_id}/items",
-        params={**params, "limit": max_items}, timeout=30
-    ).json()
-    return items if isinstance(items, list) else []
+        # Fetch items
+        dataset_id = status_resp.json()["data"]["defaultDatasetId"]
+        items_resp = HTTP.get(
+            f"{APIFY_BASE}/datasets/{dataset_id}/items",
+            headers=headers,
+            params={"limit": max_items},
+            timeout=30,
+        )
+        _raise_api_error(items_resp)
+        items = items_resp.json()
+        return items if isinstance(items, list) else []
+    except ProxyError as exc:
+        raise RuntimeError(
+            "Proxy connection failed while calling Apify. "
+            "Set DISABLE_SYSTEM_PROXY=1 in .env (recommended) "
+            "or configure NO_PROXY for api.apify.com."
+        ) from exc
+    except RequestException as exc:
+        raise RuntimeError(f"Network request to Apify failed: {exc}") from exc
 
 
 # ══════════════════════════════════════════════════════════════
@@ -443,7 +497,8 @@ def main():
         print(f"  ✅ {name}: {len([j for j in all_jobs if j['Source'] == name])} jobs collected")
 
     if not all_jobs:
-        print("\n❌ No jobs were collected. Check your API token and internet connection.")
+        print("\n❌ No jobs were collected.")
+        print("   Check API limits, actor availability, token validity, and internet/proxy settings.")
         sys.exit(1)
 
     print(f"\n📊 Total jobs collected: {len(all_jobs)}")
