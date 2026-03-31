@@ -222,6 +222,111 @@ python apply_jobs.py dotnet_jobs_*.xlsx auto 5
 
 ---
 
+## 🏭 Production Deployment (Docker)
+
+### Files Added
+- `Dockerfile` (Flask API via Gunicorn)
+- `docker-compose.prod.yml` (frontend + backend)
+- `frontend/Dockerfile` (Vite build + Nginx serve)
+- `frontend/deploy/nginx.conf` (SPA + `/api` reverse proxy)
+- `.env.production.example` (production env template)
+
+### 1. Prepare Production Env
+```bash
+cp .env.production.example .env.production
+```
+
+Edit `.env.production` and set real values:
+- `APIFY_API_TOKEN`
+- `SECRET_KEY`
+- `ALLOWED_ORIGINS`
+
+### 2. Build and Run
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### 3. Verify Services
+```bash
+curl http://localhost/api/health
+```
+
+### 4. Persistent Job Files
+Generated files are stored in Docker volume `job_data` mounted at `/app/data`.
+
+### 5. Stop Services
+```bash
+docker compose -f docker-compose.prod.yml down
+```
+
+## ✅ 12-Step Enterprise Setup Execution
+
+### Step 1: Prepare Production-Ready App
+- API server now reads environment-based runtime config and no longer requires debug mode.
+- CORS is now origin-restricted using `ALLOWED_ORIGINS`.
+- Basic security headers and API rate limiting are enabled.
+
+### Step 2: Production Environment Variables
+- Added `.env.production.example` with required variables.
+- Added `frontend/.env.production.example` for frontend API base config.
+
+### Step 3: Containerize Backend
+- Added root `Dockerfile` using Gunicorn for Flask serving.
+- Added persistent data path support through `JOB_DATA_DIR`.
+
+### Step 4: Containerize Frontend
+- Added `frontend/Dockerfile` with multi-stage build.
+- Nginx serves static frontend and proxies `/api` to backend.
+
+### Step 5: Production Compose Stack
+- Added `docker-compose.prod.yml` with health checks, restart policies, named volume, and log rotation.
+
+### Step 6: Server Provisioning Script
+- Added `deploy/server-setup.sh` to provision Ubuntu with Docker, Compose plugin, and firewall rules.
+
+### Step 7: HTTPS/Domain Reverse Proxy
+- Added `deploy/nginx.ssl.conf` with HTTP→HTTPS redirect, TLS settings, and security headers.
+
+### Step 8: CI/CD Pipeline
+- Added `.github/workflows/ci-cd.yml` for Python checks, frontend build, security audits, and Docker image builds.
+
+### Step 9: Observability & Operations
+- Added container log rotation config in compose.
+- Health endpoint enriched with environment output.
+
+### Step 10: Backup & Restore
+- Added `ops/backup/backup_data.ps1` and `ops/backup/restore_data.ps1` for operational backup/restore workflows.
+
+### Step 11: Security Hardening
+- Added dependency automation via `.github/dependabot.yml`.
+- Added rate limiting, tightened CORS policy support, and secure response headers.
+
+### Step 12: Scale Improvements (Enterprise Next)
+- Added `docker-compose.enterprise.yml` with Redis/Postgres/Worker scaffolding.
+- Added `requirements.enterprise.txt` and `worker.py` placeholder for Celery-based background job scaling.
+
+## 🚀 Run Production Stack
+
+1. Copy env template:
+```bash
+cp .env.production.example .env.production
+```
+2. Set real values in `.env.production`.
+3. Build and start stack:
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+4. Verify backend:
+```bash
+curl http://localhost/api/health
+```
+5. Open frontend:
+```text
+http://localhost
+```
+
+---
+
 ### Excel Tracking Columns
 
 After applying, these columns are automatically updated:

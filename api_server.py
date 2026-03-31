@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import logging
 import os
 import subprocess
 import sys
@@ -23,18 +24,83 @@ load_dotenv()
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("JOB_DATA_DIR", str(BASE_DIR))).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 TASKS: dict[str, dict] = {}
 TASKS_LOCK = threading.Lock()
 OUTPUT_CHAR_LIMIT = 20000
 
+ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = {
+    item.strip()
+    for item in ALLOWED_ORIGINS_RAW.split(",")
+    if item.strip()
+}
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "120"))
+RATE_LIMIT_STATE: dict[str, list[float]] = {}
+RATE_LIMIT_LOCK = threading.Lock()
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+LOGGER = logging.getLogger("api_server")
+
 app = Flask(__name__)
+
+
+def _is_origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return True
+    if "*" in ALLOWED_ORIGINS:
+        return True
+    return origin in ALLOWED_ORIGINS
+
+
+def _is_rate_limited(client_key: str) -> bool:
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+
+    with RATE_LIMIT_LOCK:
+        existing = RATE_LIMIT_STATE.get(client_key, [])
+        recent = [stamp for stamp in existing if stamp >= cutoff]
+        if len(recent) >= RATE_LIMIT_MAX_REQUESTS:
+            RATE_LIMIT_STATE[client_key] = recent
+            return True
+
+        recent.append(now)
+        RATE_LIMIT_STATE[client_key] = recent
+        return False
+
+
+@app.before_request
+def before_request_checks():
+    origin = request.headers.get("Origin")
+    if not _is_origin_allowed(origin):
+        return jsonify({"error": "Origin not allowed"}), 403
+
+    if request.path.startswith("/api/"):
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
+        if _is_rate_limited(client_ip):
+            return jsonify({"error": "Too many requests"}), 429
 
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("Origin")
+    if origin and _is_origin_allowed(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    elif "*" in ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
     return response
 
 
@@ -56,8 +122,8 @@ def _resolve_excel_file(filename: str) -> Path:
     if not filename:
         raise ValueError("Missing file name")
 
-    candidate = (BASE_DIR / filename).resolve()
-    if BASE_DIR not in candidate.parents:
+    candidate = (DATA_DIR / filename).resolve()
+    if DATA_DIR not in candidate.parents:
         raise ValueError("Invalid file path")
     if candidate.suffix.lower() != ".xlsx":
         raise ValueError("Only .xlsx files are supported")
@@ -68,7 +134,7 @@ def _resolve_excel_file(filename: str) -> Path:
 
 def _list_excel_files() -> list[dict]:
     files = sorted(
-        BASE_DIR.glob("dotnet_jobs_*.xlsx"),
+        DATA_DIR.glob("dotnet_jobs_*.xlsx"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -240,7 +306,7 @@ def _mark_all_jobs_applied(excel_path: Path) -> dict:
         }
 
 
-def _run_subprocess_task(task_id: str, command: list[str]) -> None:
+def _run_subprocess_task(task_id: str, command: list[str], extra_env: dict[str, str] | None = None) -> None:
     started = time.time()
     output = ""
     return_code = None
@@ -249,7 +315,7 @@ def _run_subprocess_task(task_id: str, command: list[str]) -> None:
         process = subprocess.Popen(
             command,
             cwd=str(BASE_DIR),
-            env=os.environ.copy(),
+            env={**os.environ.copy(), **(extra_env or {})},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -275,7 +341,7 @@ def _run_subprocess_task(task_id: str, command: list[str]) -> None:
         task["output"] = _tail_text(output)
 
 
-def _start_task(name: str, command: list[str]) -> dict:
+def _start_task(name: str, command: list[str], extra_env: dict[str, str] | None = None) -> dict:
     task_id = str(uuid.uuid4())
     task = {
         "id": task_id,
@@ -292,7 +358,7 @@ def _start_task(name: str, command: list[str]) -> dict:
     with TASKS_LOCK:
         TASKS[task_id] = task
 
-    thread = threading.Thread(target=_run_subprocess_task, args=(task_id, command), daemon=True)
+    thread = threading.Thread(target=_run_subprocess_task, args=(task_id, command, extra_env), daemon=True)
     thread.start()
 
     return task
@@ -303,7 +369,19 @@ def health_check():
     with TASKS_LOCK:
         running = sum(1 for task in TASKS.values() if task["status"] == "running")
 
-    return jsonify({"ok": True, "runningTasks": running, "timestamp": datetime.now().isoformat()})
+    return jsonify(
+        {
+            "ok": True,
+            "runningTasks": running,
+            "timestamp": datetime.now().isoformat(),
+            "environment": os.getenv("FLASK_ENV", "development"),
+        }
+    )
+
+
+@app.options("/api/<path:subpath>")
+def preflight_options(subpath: str):
+    return ("", 204)
 
 
 @app.get("/api/files")
@@ -346,7 +424,7 @@ def get_task(task_id: str):
 @app.post("/api/scrape")
 def start_scrape():
     command = [sys.executable, "dotnet_job_scraper.py"]
-    task = _start_task("scrape", command)
+    task = _start_task("scrape", command, {"JOB_OUTPUT_DIR": str(DATA_DIR)})
     return jsonify(task), 202
 
 
@@ -361,7 +439,7 @@ def start_auto_apply():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
-    command = [sys.executable, "auto_apply.py", excel_file.name]
+    command = [sys.executable, "auto_apply.py", str(excel_file)]
     if max_applications:
         command.append(str(max_applications))
 
@@ -384,7 +462,7 @@ def start_apply():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
-    command = [sys.executable, "apply_jobs.py", excel_file.name, mode]
+    command = [sys.executable, "apply_jobs.py", str(excel_file), mode]
     if max_applications:
         command.append(str(max_applications))
 
@@ -513,4 +591,8 @@ def get_applied_summary():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "false").lower() in {"1", "true", "yes"}
+    LOGGER.info("Starting API server on %s:%s debug=%s data_dir=%s", host, port, debug, DATA_DIR)
+    app.run(host=host, port=port, debug=debug)

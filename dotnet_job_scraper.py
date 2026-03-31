@@ -58,7 +58,9 @@ if not APIFY_API_TOKEN:
 SEARCH_KEYWORD   = ".NET Developer"              # Change to "C# Developer", "ASP.NET", etc.
 SEARCH_LOCATION  = "India"                       # e.g. "Kolkata", "Remote", "United States"
 TOTAL_JOBS       = 100                           # Total jobs to collect
-OUTPUT_FILE      = f"dotnet_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+OUTPUT_DIR       = os.getenv("JOB_OUTPUT_DIR", ".")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+OUTPUT_FILE      = os.path.join(OUTPUT_DIR, f"dotnet_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
 
 # ── Apify Actor IDs (available on Apify Store) ──────────────
 # LinkedIn Jobs Scraper  → https://apify.com/curious_coder/linkedin-jobs-scraper
